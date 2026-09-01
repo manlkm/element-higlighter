@@ -184,10 +184,14 @@ async function loadHighlights() {
   const stored = (await chrome.storage.local.get(domain))[domain] || {};
 
   for (const [selector, color] of Object.entries(stored)) {
-    document.querySelectorAll(selector).forEach((el) => {
-      el.style.backgroundColor = color;
-      el.setAttribute(HIGHLIGHT_ATTR, "true");
-    });
+    try {
+      document.querySelectorAll(selector).forEach((el) => {
+        el.style.backgroundColor = color;
+        el.setAttribute(HIGHLIGHT_ATTR, "true");
+      });
+    } catch (e) {
+      console.warn("Invalid selector from storage:", selector);
+    }
   }
 }
 
@@ -204,7 +208,7 @@ async function resetHighlights() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. CSS Selector Generation
+// 6. CSS Selector Generation 
 // ---------------------------------------------------------------------------
 function getCssPath(el) {
   if (!el || el.nodeType !== Node.ELEMENT_NODE) return "";
@@ -213,23 +217,28 @@ function getCssPath(el) {
   let current = el;
 
   while (current && current.nodeType === Node.ELEMENT_NODE) {
-    // If an element has an ID, use it and stop — IDs are unique.
-    if (current.id) {
+    if (current.id && !/^\d|-|_/.test(current.id)) {
       segments.unshift("#" + cssEscape(current.id));
       break;
     }
 
-    segments.unshift(tagWithNthOfType(current));
+    let selector = current.nodeName.toLowerCase();
+    
+    if (current.className && typeof current.className === "string") {
+      const classes = current.className.trim().split(/\s+/);
+      if (classes.length > 0 && classes[0]) {
+        selector += "." + cssEscape(classes[0]);
+      }
+    }
+
+    segments.unshift(tagWithNthOfType(current, selector));
     current = current.parentNode;
   }
 
   return segments.join(" > ");
 }
 
-function tagWithNthOfType(el) {
-  const tag = el.nodeName.toLowerCase();
-
-  // Count this element's position among same-typed siblings (1-based).
+function tagWithNthOfType(el, baseSelector) {
   let index = 1;
   let sibling = el.previousElementSibling;
   while (sibling) {
@@ -237,7 +246,6 @@ function tagWithNthOfType(el) {
     sibling = sibling.previousElementSibling;
   }
 
-  // Determine whether any following sibling shares this element's type.
   let hasFollowingSameType = false;
   sibling = el.nextElementSibling;
   while (sibling) {
@@ -248,9 +256,8 @@ function tagWithNthOfType(el) {
     sibling = sibling.nextElementSibling;
   }
 
-  // Only qualify with :nth-of-type() when it is required for uniqueness.
-  if (index === 1 && !hasFollowingSameType) return tag;
-  return `${tag}:nth-of-type(${index})`;
+  if (index === 1 && !hasFollowingSameType) return baseSelector;
+  return `${baseSelector}:nth-of-type(${index})`;
 }
 
 function cssEscape(value) {
@@ -259,11 +266,27 @@ function cssEscape(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Event wiring & initial load
+// 7. Event wiring & DOM Observer
 // ---------------------------------------------------------------------------
 document.addEventListener("mouseover", handleMouseOver, true);
 document.addEventListener("mouseout", handleMouseOut, true);
 document.addEventListener("click", handleClick, true);
 
-// Apply any previously saved highlights for this domain.
-loadHighlights();
+// 加入 MutationObserver 處理動態載入的元素
+let loadTimer = null;
+const observer = new MutationObserver(() => {
+  clearTimeout(loadTimer);
+  loadTimer = setTimeout(loadHighlights, 300); // 防抖設計，延遲 300ms 執行
+});
+
+function init() {
+  loadHighlights();
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+// 確保 DOM 準備好後才啟動
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
